@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <title>Demo</title>
+  <style>
+    input,
+    button,
+    body {
+      font-family: monospace;
+      font-size: 11pt;
+      margin-bottom: 1.5ex;
+    }
+
+    #filters,
+    #breakdowns {
+      width: calc(100% - 11pt);
+    }
+  </style>
+</head>
+
+<body>
+  <form>
+    <section>
+      <input autocomplete="on" type="number" name="timezone" id="timezone" />
+      <input autocomplete="on" type="date" name="from" id="from" />
+      <input autocomplete="on" type="date" name="to" id="to" />
+      <div>
+        <input autocomplete="on" type="text" name="filters" id="filters" />
+      </div>
+      <div>
+        <input autocomplete="on" type="text" name="breakdowns" id="breakdowns" />
+      </div>
+      <button type="submit">GO!</button>
+    </section>
+    <section>
+      <pre id="result">Press GO or Enter</pre>
+    </section>
+  </form>
+  <script src="https://code.jquery.com/jquery-3.4.1.min.js"></script>
+  <script>
+    const $timezone = $("#timezone")
+    const $from = $("#from")
+    const $to = $("#to")
+    const $filters = $("#filters")
+    const $breakdowns = $("#breakdowns")
+    $(function () {
+      var d = new Date()
+      $timezone.val(d.getTimezoneOffset() / -60)
+      $from.val(
+        (new Date(new Date().valueOf() - 1 * 24 * 3600 * 1000)).toJSON().split('T')[0]
+      )
+      $to.val(
+        (new Date(new Date().valueOf() + 1 * 24 * 3600 * 1000)).toJSON().split('T')[0]
+      )
+    })
+
+    const tokens = location.href.split('/').slice(3)
+    console.log(tokens)
+    if(tokens.length === 5) {
+      $timezone.val(decodeURIComponent( tokens[0]))
+      $from.val(decodeURIComponent( tokens[1]))
+      $to.val(decodeURIComponent( tokens[2]))
+      $filters.val(decodeURIComponent( tokens[3]))
+      $breakdowns.val(decodeURIComponent( tokens[4]))
+    }
+
+    $("form").submit(function (e) {
+      e.preventDefault();
+      const path = `/${$timezone.val()}/${$from.val()}/${$to.val()}/${$filters.val()}/${$breakdowns.val()}`
+      const url = `/api${path}`
+
+      window.history.pushState('', document.title, path)
+
+      $("#result").html('loading')
+      $.getJSON(url).then(x => {
+        $("#result").html(JSON.stringify(x, null, 2))
+      }).fail(x => {
+        $("#result").html(x.responseText)
+      })
+    });
+  </script>
+</body>
+
+</html>
