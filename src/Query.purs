@@ -1,18 +1,19 @@
 module Server.Query where
 
+import Data.Array (head)
 import Data.Bifunctor (lmap)
 import Data.Either (Either(..), either)
 import Data.JSDate as JSDate
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), maybe)
 import Database.Postgres as PG
 import Effect (Effect)
-import Effect.Aff (Aff, Error, Fiber, attempt, error, forkAff, joinFiber, killFiber, launchAff, throwError)
+import Effect.Aff (Aff, Canceler(..), Error, Fiber, attempt, cancelWith, error, forkAff, joinFiber, killFiber, launchAff, throwError)
 import Effect.Class (liftEffect)
 import Effect.Console (log)
 import Effect.Exception as X
 import Effect.Ref (Ref)
 import Foreign (Foreign)
-import Prelude (class Show, bind, discard, mempty, not, pure, show, void, ($), (&&), (<<<), (<>), (>>=), (||))
+import Prelude (class Show, bind, discard, identity, mempty, not, pure, show, void, ($), (&&), (<$>), (<<<), (<>), (>>=), (||))
 import Simple.JSON as JSON
 import Utils.TTLCache as C
 
@@ -67,9 +68,9 @@ type GetQueryState =
 
 queryAsync :: 
     Ref (C.Cache QueryState)
-  → PG.Pool 
+  → {queryPool :: PG.Pool, adminPool :: PG.Pool}
   → RunDbQueryAsync 
-queryAsync cache pool nocache qid q = do
+queryAsync cache {queryPool, adminPool} nocache qid q = do
   mcached <- C.getCache cache qid
   case mcached of 
     Just cached -> 
@@ -80,13 +81,24 @@ queryAsync cache pool nocache qid q = do
 
   where 
   go = do
-    let myAff = PG.withClient pool (PG.query_ read' (PG.Query q :: PG.Query Foreign))
-
-    fiber <- forkAff $ do
-      results <- attempt myAff
-      liftEffect $ log $ "Done " <> qid
-      liftEffect $ C.updateCache cache qid  (either (Error <<< show) Done results)
-      pure results
+    fiber <- PG.withClient queryPool $ \client -> do 
+      recs <- PG.query_ (read':: Foreign -> Either Error ( {clientid :: Int})) (PG.Query ("SELECT pg_backend_pid() as clientid" )) client
+      let queryId = maybe 0 identity ((\c -> c.clientid) <$> head recs)
+      liftEffect $ log (show $ (\c -> c.clientid) <$> head recs)
+      forkAff $ do 
+        cancelWith (do 
+            results <- attempt $ PG.query_ read' (PG.Query q :: PG.Query Foreign) client
+            liftEffect $ log $ "Done " <> qid
+            liftEffect $ C.updateCache cache qid  (either (Error <<< show) Done results)
+            pure results
+        ) $ Canceler (\_ -> do 
+          liftEffect $ log "cacnelling!"
+          adminResult <- attempt $ PG.withClient adminPool $ \adminClient -> do
+            liftEffect $ log "cancelling connected..."
+            PG.query_ (read' :: Foreign -> Either Error ({cancelled :: Int})) (PG.Query ("select pg_cancel_backend(" <> (show queryId) <> ") as cancelled;")) adminClient
+          liftEffect $ log (show adminResult)
+          liftEffect $ log "cancelled!"
+        )
 
     now <- liftEffect JSDate.now
     let st = Running fiber now
@@ -110,7 +122,7 @@ killQuery cache qid = do
       x -> pure $ Left $ "Invalid Query State: " <> show x
 
 
-querySync :: Ref (C.Cache QueryState) → PG.Pool → RunDbQuerySync
+querySync :: Ref (C.Cache QueryState) → {queryPool :: PG.Pool, adminPool :: PG.Pool} → RunDbQuerySync
 querySync cache pool nocache hash sqlTemplate = do
   qs <- queryAsync cache pool nocache hash sqlTemplate
   case qs of

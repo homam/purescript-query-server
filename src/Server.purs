@@ -69,7 +69,22 @@ app = do
     connStr <- liftEffect $ lookupEnv "jewel_connection_string" >>= \ m -> case m of
       Just a -> pure a
       Nothing -> throw "Expected jewel_connection_string ENV variable."
-    (AppState state) <- liftEffect $ connect connStr    
+    (AppState state) <- liftEffect $ connect connStr  
+    -- just for testing kill function  
+    get "/api/test/kill/:qid" $ do 
+      qid <- requiredRouteParam'' "qid"
+      r <- liftEffect $ state.killQuery qid
+      send r
+    get "/api/test/get/:qid" $ do 
+      qid <- requiredRouteParam'' "qid"
+      r <- liftEffect $ state.getQueryState qid
+      send r
+    get "/api/test/run/:fromTimestamp/:qid" $ do 
+      qid <- requiredRouteParam'' "qid"
+      fromTimestampRouteParam <- requiredRouteParam'' "fromTimestamp"
+      r <- liftAff $ attempt $ state.queryAsync false qid ("select * from user_sessions where timestamp > '" <> fromTimestampRouteParam <> "' order by user_agent limit 100000")
+      send {"waiting": "..."}
+    -- ^^ just for testing kill function
     get "/api/:timezone/:fromTimestamp/:toTimestamp/:filters/:breakdowns" $ do 
         timezoneRouteParam <- requiredRouteParam "timezone" Number.fromString "timezone must be a number"
         fromTimestampRouteParam <- requiredRouteParam'' "fromTimestamp"
@@ -147,10 +162,11 @@ connect connStr = do
   let connectionInfo = PG.connectionInfoFromString connStr
 
   cache <- Ref.new mkQueryCache
-  pool <- PG.mkPool connectionInfo
+  queryPool <- PG.mkPool connectionInfo
+  adminPool <- PG.mkPool connectionInfo
 
-  let queryAsync' = queryAsync cache pool 
-  let querySync' = querySync cache pool 
+  let queryAsync' = queryAsync cache {queryPool, adminPool} 
+  let querySync' = querySync cache {queryPool, adminPool}  
   let getQueryState' = getQueryState cache
   let killQuery' = killQuery cache
 
